@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
+import argparse
 import csv
+import glob
 import re
 import sys
-
+import os 
 import coojatrace
 from humanfriendly.tables import format_pretty_table
-
+from shutil import copyfile
 
 def write_csv(trace, csv_file, columns, data):
     if trace.is_file(csv_file):
@@ -19,55 +21,95 @@ def write_csv(trace, csv_file, columns, data):
 
 
 def main():
-    trace = coojatrace.main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s', action='store_true', dest='summary', default=False)
+    parser.add_argument('input', type=str, nargs='+')
 
-    network_events = trace.get_events(event_type='network', description='steady-state')
-    network_stable_time = network_events[0].time if network_events else 0
+    try:
+        conopts = parser.parse_args()
+    except Exception as e:
+        sys.exit(f"Illegal arguments: {str(e)}")
+    print(conopts.input)
+    import sys
+    if sys.platform.startswith("win") and "*" in conopts.input:
+        conopts.input = glob.glob(conopts.input)
+    
+    if not isinstance(conopts.input, list):
+        conopts.input = [i for i in conopts.input]
+    # conopts.input = [i for i in conopts.input if os.path.isdir(i)]
+    print("line.40")
+    csv_files_path = os.path.abspath(os.path.join(conopts.input[0], os.pardir))
 
-    network_script = trace.get_script(description='attack')
-    network_attack_time = network_script[0].time if network_script else 0
+    if not os.path.exists(csv_files_path + '/csv_files'):
+        os.makedirs(csv_files_path + '/csv_files')
+    else:
+        print('Exist a csv_files folder \n')
 
-    motes = {}
-    data = []
-    p = re.compile(r'.*DATA: (.+)$')
-    # Only look at mote output from after the network is stable
-    # Note that first statistics counters should not be counted as they might
-    # include data from before the network was stable.
-    for o in trace.get_mote_output(start_time=network_stable_time):
-        m = p.match(o.message)
-        if m:
-            row = [o.time, o.mote_id] + [int(v) for _k, v in (g.split(':') for g in m.group(1).split(','))]
-            last = motes[o.mote_id] if o.mote_id in motes else None
-            motes[o.mote_id] = row
-            # Use relative counters since last known statistics instead of aggregated
-            if last:
-                row = row[:5] + [x - y for x, y in zip(row[5:], last[5:])]
-            else:
-                pass
-                # row = row[:5] + [0] * 6
-            if (o.time < network_attack_time) or (network_attack_time == 0):
-                row = row + ['No']
-            elif o.time > network_attack_time:
-                row = row + [network_script[0].description.split(' ', 1)[0]]
-            else:
-                row = row + ['Start']
+    a = 0
+    for input in conopts.input:
+        a += 1
+        trace , simulation_logdir= coojatrace.main((input, conopts.summary))
 
-            data.append(row)
+        print(input)
+        network_events = trace.get_events(event_type='network', description='steady-state')
+        network_stable_time = network_events[0].time if network_events else 0
 
-    # Print 20 first values
-    column_names = ['Time', 'Mote',
-                    'Seq', 'Rank', 'Version',
-                    'DIS-UR', 'DIS-MR', 'DIS-US', 'DIS-MS',
-                    'DIO-UR', 'DIO-MR', 'DIO-US', 'DIO-MS',
-                    'DAO-R', 'DAO-S', 'DAOA-R', 'DAOA-S', 'dio_intcurrent', 'dio_counter',
-                    'Attack']
-    print(format_pretty_table(data[:20], column_names))
-    if len(data) > 20:
-        print(f"Only showing 20 first rows - remaining {len(data) - 20} rows not shown.")
+        network_script = trace.get_script(description='attack')
+        network_attack_time = network_script[0].time if network_script else 0
 
-    # Save statistics to CSV file
-    write_csv(trace, 'rpl-statistics.csv', column_names, data)
+        motes = {}
+        data = []
+        p = re.compile(r'.*DATA: (.+)$')
+        # Only look at mote output from after the network is stable
+        # Note that first statistics counters should not be counted as they might
+        # include data from before the network was stable.
+        for o in trace.get_mote_output(start_time=network_stable_time):
+            m = p.match(o.message)
+            if m:
+                row = [o.time, o.mote_id] + [int(v) for _k, v in (g.split(':') for g in m.group(1).split(','))]
+                last = motes[o.mote_id] if o.mote_id in motes else None
+                motes[o.mote_id] = row
+                # Use relative counters since last known statistics instead of aggregated
+                if last:
+                    row = row[:5] + [x - y for x, y in zip(row[5:], last[5:])]
+                else:
+                    pass
+                    # row = row[:5] + [0] * 6
+                if (o.time < network_attack_time) or (network_attack_time == 0):
+                    row = row + ['No']
+                elif o.time > network_attack_time:
+                    row = row + [network_script[0].description.split(' ', 1)[0]]
+                else:
+                    row = row + ['Start']
 
+                data.append(row)
+
+        # Print 20 first values
+        column_names = ['Time', 'Mote',
+                        'Seq', 'Rank', 'Version',
+                        'DIS-UR', 'DIS-MR', 'DIS-US', 'DIS-MS',
+                        'DIO-UR', 'DIO-MR', 'DIO-US', 'DIO-MS',
+                        'DAO-R', 'DAO-S', 'DAOA-R', 'DAOA-S', 'dio_intcurrent', 'dio_counter',
+                        'Attack']
+        print(format_pretty_table(data[:20], column_names))
+        if len(data) > 20:
+            print(f"Only showing 20 first rows - remaining {len(data) - 20} rows not shown.")
+
+        # Save statistics to CSV file
+        write_csv(trace, 'rpl-statistics.csv', column_names, data)
+        
+        relation_name = os.path.split(os.path.splitext(input)[0])[1]
+        relation_name1 = os.path.split(os.path.splitext(input)[1])[1]
+
+
+        
+        csv_filename = csv_files_path + '/csv_files/' + relation_name + relation_name1 + '.csv'
+            
+        # diodrop-tx0.80-rx0.90-00001-dt-1670587999643.csv
+        src_file = input + '/rpl-statistics.csv'
+        print('src_file: ',src_file)
+        print('csv_filename: ',csv_filename)
+        copyfile(src_file, csv_filename)
 
 if __name__ == '__main__':
     main()
